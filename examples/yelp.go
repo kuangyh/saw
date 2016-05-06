@@ -56,10 +56,12 @@ func (yh *YelpHandler) Emit(datum saw.Datum) error {
 		Key:   saw.DatumKey(review.BizId),
 		Value: float64(1),
 	})
-	reviewByUserTable.Emit(saw.Datum{
-		Key:   saw.DatumKey(review.UserId),
-		Value: review.Text,
-	})
+	for i := 0; i < 5; i++ {
+		reviewByUserTable.Emit(saw.Datum{
+			Key:   saw.DatumKey(review.UserId),
+			Value: review.Text,
+		})
+	}
 	return nil
 }
 

@@ -9,6 +9,12 @@ import (
 	"sync"
 )
 
+const (
+	KiB = 1024
+	MiB = KiB * 1024
+	GiB = MiB * 1024
+)
+
 var InvalidTableSpecErr = errors.New("saw.table: invalid table spec")
 
 type KeyHashFunc func(saw.DatumKey) int
@@ -37,6 +43,8 @@ type TableSpec struct {
 	// adjust it according to your normal value size to be persistent, defualts to
 	// 256
 	EncodingPoolBufferSize int
+	// Buffer size when writing to SSTable, defaults to 64MB
+	SSTableWriteBufferSize int
 }
 
 func getKeyHash(key saw.DatumKey) int {
@@ -54,6 +62,9 @@ func fillSpecDefaults(spec *TableSpec) {
 	}
 	if spec.EncodingPoolBufferSize == 0 {
 		spec.EncodingPoolBufferSize = 256
+	}
+	if spec.SSTableWriteBufferSize == 0 {
+		spec.SSTableWriteBufferSize = 64 * MiB
 	}
 }
 
@@ -141,7 +152,8 @@ func (tbl *MemTable) Result(ctx context.Context) (result interface{}, err error)
 	result = resultMap
 
 	if len(tbl.spec.PersistentPath) > 0 {
-		tableWriter, err = openSSTableWriter(tbl.spec.PersistentPath)
+		tableWriter, err = openSSTableWriter(
+			tbl.spec.PersistentPath, tbl.spec.SSTableWriteBufferSize)
 		if err != nil {
 			return nil, err
 		}
@@ -193,7 +205,7 @@ func NewCollectionTable(spec TableSpec) (*CollectionTable, error) {
 	if len(spec.PersistentPath) == 0 || spec.ValueEncoder == nil {
 		return nil, InvalidTableSpecErr
 	}
-	tableWriter, err := openSSTableWriter(spec.PersistentPath)
+	tableWriter, err := openSSTableWriter(spec.PersistentPath, spec.SSTableWriteBufferSize)
 	if err != nil {
 		return nil, err
 	}

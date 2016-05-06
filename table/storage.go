@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/kuangyh/saw"
 	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/opt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -56,8 +57,12 @@ type ssTableWriter struct {
 	db          *leveldb.DB
 }
 
-func openSSTableWriter(path string) (TableWriter, error) {
-	db, err := leveldb.OpenFile(path, nil)
+func openSSTableWriter(path string, writeBufferSize int) (TableWriter, error) {
+	db, err := leveldb.OpenFile(path, &opt.Options{
+		CompactionTableSize: 4 * MiB,
+		CompactionTotalSize: 16 * MiB,
+		WriteBuffer:         writeBufferSize,
+	})
 	if err != nil {
 		return nil, err
 	}

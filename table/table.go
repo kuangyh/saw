@@ -185,6 +185,7 @@ type CollectionTable struct {
 	spec        TableSpec
 	tableWriter TableWriter
 	bufferPool  *sync.Pool
+	countVar    saw.VarInt
 }
 
 func NewCollectionTable(spec TableSpec) (*CollectionTable, error) {
@@ -205,10 +206,12 @@ func NewCollectionTable(spec TableSpec) (*CollectionTable, error) {
 		spec:        spec,
 		tableWriter: tableWriter,
 		bufferPool:  &bufferPool,
+		countVar:    saw.ReportInt(spec.Name, "count"),
 	}, nil
 }
 
 func (tbl *CollectionTable) Emit(kv saw.Datum) error {
+	tbl.countVar.Add(1)
 	shardIdx := tbl.spec.KeyHashFunc(kv.Key) % tbl.spec.NumShards
 	b := tbl.bufferPool.Get().([]byte)
 	defer tbl.bufferPool.Put(b)

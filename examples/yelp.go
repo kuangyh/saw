@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	_ "net/http/pprof"
@@ -99,7 +98,7 @@ func init() {
 }
 
 func loadFile(filename string, shards int) error {
-	file, err := os.Open(filename)
+	file, err := saw.OpenGCSFile(context.Background(), filename)
 	if err != nil {
 		return err
 	}
@@ -127,7 +126,7 @@ func main() {
 	}()
 
 	startTime := time.Now()
-	loadFile("/home/pudding/Projects/dataset/yelp/review.log", 256)
+	loadFile("/xv-dev/yelp-data/review.log", 256)
 	fmt.Println("Done", time.Since(startTime))
 	result, err := bizSumTable.Result(context.Background())
 	if err != nil {

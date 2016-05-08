@@ -3,28 +3,32 @@ package saw
 import (
 	"encoding/json"
 	"io"
+	"reflect"
 )
-
-var JSONEncoder = jsonEncoder{}
-
-var JSONDecoder = jsonDecoder{}
 
 type ValueEncoder interface {
 	EncodeValue(value interface{}, w io.Writer) error
 }
 
 type ValueDecoder interface {
-	DecodeValue(r io.Reader, value interface{}) error
+	DecodeValue(r io.Reader) (interface{}, error)
 }
 
-type jsonEncoder struct{}
+type JSONEncoder struct{}
 
-func (je jsonEncoder) EncodeValue(value interface{}, w io.Writer) error {
+func (je JSONEncoder) EncodeValue(value interface{}, w io.Writer) error {
 	return json.NewEncoder(w).Encode(value)
 }
 
-type jsonDecoder struct{}
+type JSONDecoder struct {
+	ValueType reflect.Type
+}
 
-func (jd jsonDecoder) DecodeValue(r io.Reader, value interface{}) error {
-	return json.NewDecoder(r).Decode(value)
+func (jd JSONDecoder) DecodeValue(r io.Reader) (interface{}, error) {
+	value := reflect.New(jd.ValueType).Interface()
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(value); err != nil {
+		return nil, err
+	}
+	return value, nil
 }

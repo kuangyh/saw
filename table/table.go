@@ -1,18 +1,12 @@
 package table
 
 import (
-	"bytes"
 	"errors"
 	"github.com/kuangyh/saw"
+	"github.com/kuangyh/saw/storage"
 	"golang.org/x/net/context"
 	"hash/fnv"
 	"sync"
-)
-
-const (
-	KiB = 1024
-	MiB = KiB * 1024
-	GiB = MiB * 1024
 )
 
 var InvalidTableSpecErr = errors.New("saw.table: invalid table spec")
@@ -35,19 +29,16 @@ type TableSpec struct {
 	NumShards int
 
 	// When not empty, table state will be eventually persistent
-	PersistentPath string
+	PersistentResource storage.ResourceSpec
 	// It depends on table type to determine what data get persistent and what
-	// encoder to use.
+	// encoder to use. Defaults to verbatim (accepts and store []byte)
 	ValueEncoder saw.ValueEncoder
-	// Implementation uses a sync.Pool to avoid frequent alloc encoding buffer
-	// adjust it according to your normal value size to be persistent, defualts to
-	// 256
-	EncodingPoolBufferSize int
-	// Buffer size when writing to SSTable, defaults to 64MB
-	SSTableWriteBufferSize int
+	// Implementation may pre-allocate and reuse buffer for encoding values, to avoid
+	// frequent malloc, defaults to 4096
+	ValueEncodeBufferSize int
 }
 
-func getKeyHash(key saw.DatumKey) int {
+func defaultGetKeyHash(key saw.DatumKey) int {
 	hash := fnv.New32()
 	hash.Write([]byte(key))
 	return int(hash.Sum32())
@@ -55,16 +46,15 @@ func getKeyHash(key saw.DatumKey) int {
 
 func fillSpecDefaults(spec *TableSpec) {
 	if spec.KeyHashFunc == nil {
-		spec.KeyHashFunc = getKeyHash
+		spec.KeyHashFunc = defaultGetKeyHash
 	}
 	if spec.NumShards == 0 {
 		spec.NumShards = 127
 	}
-	if spec.EncodingPoolBufferSize == 0 {
-		spec.EncodingPoolBufferSize = 256
-	}
-	if spec.SSTableWriteBufferSize == 0 {
-		spec.SSTableWriteBufferSize = 64 * MiB
+	if spec.PersistentResource.HasSpec() {
+		if spec.ValueEncodeBufferSize == 0 {
+			spec.ValueEncodeBufferSize = 4096
+		}
 	}
 }
 
@@ -73,6 +63,7 @@ type SimpleTable struct {
 	items      map[saw.DatumKey]saw.Saw
 	banned     map[saw.DatumKey]error
 	numKeysVar saw.VarInt
+	errVar     saw.VarInt
 }
 
 func NewSimpleTable(spec TableSpec) *SimpleTable {
@@ -82,10 +73,11 @@ func NewSimpleTable(spec TableSpec) *SimpleTable {
 		items:      make(map[saw.DatumKey]saw.Saw),
 		banned:     make(map[saw.DatumKey]error),
 		numKeysVar: saw.ReportInt(spec.Name, "keys"),
+		errVar:     saw.ReportInt(spec.Name, "errors"),
 	}
 }
 
-func (tbl *SimpleTable) Emit(kv saw.Datum) error {
+func (tbl *SimpleTable) Emit(kv saw.Datum) (err error) {
 	saw, ok := tbl.items[kv.Key]
 	if !ok {
 		if err, banned := tbl.banned[kv.Key]; banned {
@@ -100,7 +92,11 @@ func (tbl *SimpleTable) Emit(kv saw.Datum) error {
 		tbl.items[kv.Key] = saw
 		tbl.numKeysVar.Add(1)
 	}
-	return saw.Emit(kv)
+	err = saw.Emit(kv)
+	if err != nil {
+		tbl.errVar.Add(1)
+	}
+	return err
 }
 
 func (tbl *SimpleTable) Result(ctx context.Context) (interface{}, error) {
@@ -147,20 +143,19 @@ func (tbl *MemTable) Emit(kv saw.Datum) error {
 }
 
 func (tbl *MemTable) Result(ctx context.Context) (result interface{}, err error) {
-	var tableWriter TableWriter
 	resultMap := make(TableResultMap)
-	result = resultMap
 
-	if len(tbl.spec.PersistentPath) > 0 {
-		tableWriter, err = openSSTableWriter(
-			tbl.spec.PersistentPath, tbl.spec.SSTableWriteBufferSize)
+	var collectTable *CollectTable
+	if tbl.spec.PersistentResource.HasSpec() {
+		collectTableSpec := tbl.spec
+		collectTableSpec.Name = collectTableSpec.Name + "_collect"
+		collectTable, err = NewCollectTable(ctx, collectTableSpec)
 		if err != nil {
 			return nil, err
 		}
-		defer tableWriter.Close()
+		defer collectTable.Result(ctx)
 	}
 
-	var valueBuffer bytes.Buffer
 	for shardIdx, st := range tbl.shards {
 		tbl.locks[shardIdx].Lock()
 		shardRet, err := st.Result(ctx)
@@ -170,71 +165,12 @@ func (tbl *MemTable) Result(ctx context.Context) (result interface{}, err error)
 		}
 		for k, v := range shardRet.(TableResultMap) {
 			resultMap[k] = v
-			if tableWriter != nil {
-				valueBuffer.Reset()
-				if err = tbl.spec.ValueEncoder.EncodeValue(v, &valueBuffer); err != nil {
-					return nil, err
-				}
-				if err = tableWriter.Put(shardIdx, saw.Datum{
-					Key:       k,
-					Value:     valueBuffer.Bytes(),
-					SortOrder: 0,
-				}); err != nil {
+			if collectTable != nil {
+				if err = collectTable.Emit(saw.Datum{Key: k, Value: v}); err != nil {
 					return nil, err
 				}
 			}
 		}
 	}
 	return resultMap, nil
-}
-
-type collectionWriteOp struct {
-	shard int
-	datum saw.Datum
-}
-
-type CollectionTable struct {
-	spec        TableSpec
-	tableWriter TableWriter
-	bufferPool  *sync.Pool
-	countVar    saw.VarInt
-}
-
-func NewCollectionTable(spec TableSpec) (*CollectionTable, error) {
-	fillSpecDefaults(&spec)
-	if len(spec.PersistentPath) == 0 || spec.ValueEncoder == nil {
-		return nil, InvalidTableSpecErr
-	}
-	tableWriter, err := openSSTableWriter(spec.PersistentPath, spec.SSTableWriteBufferSize)
-	if err != nil {
-		return nil, err
-	}
-	bufferPool := sync.Pool{}
-	bufferSize := spec.EncodingPoolBufferSize
-	bufferPool.New = func() interface{} {
-		return make([]byte, bufferSize)
-	}
-	return &CollectionTable{
-		spec:        spec,
-		tableWriter: tableWriter,
-		bufferPool:  &bufferPool,
-		countVar:    saw.ReportInt(spec.Name, "count"),
-	}, nil
-}
-
-func (tbl *CollectionTable) Emit(kv saw.Datum) error {
-	tbl.countVar.Add(1)
-	shardIdx := tbl.spec.KeyHashFunc(kv.Key) % tbl.spec.NumShards
-	b := tbl.bufferPool.Get().([]byte)
-	defer tbl.bufferPool.Put(b)
-	buf := bytes.NewBuffer(b)
-	if err := tbl.spec.ValueEncoder.EncodeValue(kv.Value, buf); err != nil {
-		return err
-	}
-	kv.Value = buf.Bytes()
-	return tbl.tableWriter.Put(shardIdx, kv)
-}
-
-func (tbl *CollectionTable) Result(ctx context.Context) (result interface{}, err error) {
-	return nil, tbl.tableWriter.Close()
 }

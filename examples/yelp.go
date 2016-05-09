@@ -1,10 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"github.com/kuangyh/saw"
+	"github.com/kuangyh/saw/runner"
+	"github.com/kuangyh/saw/storage"
 	"github.com/kuangyh/saw/table"
 	"golang.org/x/net/context"
 	"io"
@@ -56,12 +57,12 @@ func (yh *YelpHandler) Emit(datum saw.Datum) error {
 		Key:   saw.DatumKey(review.BizId),
 		Value: float64(1),
 	})
-	for i := 0; i < 5; i++ {
-		reviewByUserTable.Emit(saw.Datum{
-			Key:   saw.DatumKey(review.UserId),
-			Value: review.Text,
-		})
-	}
+	// for i := 0; i < 5; i++ {
+	reviewByUserTable.Emit(saw.Datum{
+		Key:   saw.DatumKey(review.UserId),
+		Value: []byte(review.Text),
+	})
+	// }
 	return nil
 }
 
@@ -70,15 +71,10 @@ func (yh *YelpHandler) Result(ctx context.Context) (interface{}, error) {
 }
 
 var (
-	bizSumTable = table.NewMemTable(table.TableSpec{
-		Name:           "bizSumTable",
-		ItemFactory:    SumItemFactory,
-		PersistentPath: "bizSumTable",
-		ValueEncoder:   saw.JSONEncoder,
-	})
+	inputTopic        = runner.TopicID("input")
+	yelpHandler       YelpHandler
+	bizSumTable       saw.Saw
 	reviewByUserTable saw.Saw
-
-	yelpHandler = &YelpHandler{}
 )
 
 type stringEncoder struct{}
@@ -89,37 +85,26 @@ func (se stringEncoder) EncodeValue(value interface{}, w io.Writer) (err error) 
 }
 
 func init() {
+	runner.GlobalHub.Register(&yelpHandler, inputTopic)
+
+	bizSumTableOutput := storage.MustParseResourcePath(
+		"recordkv:/gs/xv-dev/yelp-data/output/bizSumTable.recordio")
+	bizSumTable = table.NewMemTable(table.TableSpec{
+		Name:               "bizSumTable",
+		PersistentResource: bizSumTableOutput,
+		ItemFactory:        SumItemFactory,
+		ValueEncoder:       saw.JSONEncoder{},
+	})
+
+	reviewByUserTableOutput := storage.MustParseResourcePath(
+		"recordkv:/gs/xv-dev/output/reviewByUserTable.recordio@64")
 	var err error
-	if reviewByUserTable, err = table.NewCollectionTable(table.TableSpec{
-		Name:           "reviewByUserTable",
-		PersistentPath: "reviewByUserTable",
-		ValueEncoder:   stringEncoder{},
+	if reviewByUserTable, err = table.NewCollectTable(context.Background(), table.TableSpec{
+		Name:               "reviewByUserTable",
+		PersistentResource: reviewByUserTableOutput,
 	}); err != nil {
 		log.Panic(err)
 	}
-}
-
-func loadFile(filename string, shards int) error {
-	file, err := saw.OpenGCSFile(context.Background(), filename)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	qg := saw.QueueGroup{}
-	par := qg.NewPar(shards, 10000)
-	reader := bufio.NewReader(file)
-	for {
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			break
-		}
-		par.Sched(func() {
-			yelpHandler.Emit(saw.Datum{Value: line})
-		})
-	}
-	qg.Join()
-	return nil
 }
 
 func main() {
@@ -127,12 +112,23 @@ func main() {
 		log.Fatal(http.ListenAndServe(":8080", nil))
 	}()
 
+	batch := runner.BatchSpec{
+		Input:           storage.MustParseResourcePath("textio:/gs/xv-dev/yelp-data/review.log"),
+		Topic:           inputTopic,
+		NumShards:       64,
+		QueueBufferSize: 1000,
+	}
+
 	startTime := time.Now()
-	loadFile("/xv-dev/yelp-data/review.log", 256)
+	runner.RunBatch(batch)
 	fmt.Println("Done", time.Since(startTime))
+
 	result, err := bizSumTable.Result(context.Background())
 	if err != nil {
 		log.Panic(err)
 	}
 	fmt.Println(len(result.(table.TableResultMap)))
+
+	rc, _ := reviewByUserTable.Result(context.Background())
+	fmt.Println(rc)
 }

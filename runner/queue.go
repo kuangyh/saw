@@ -1,4 +1,4 @@
-package saw
+package runner
 
 import (
 	"sync"
@@ -39,8 +39,13 @@ type Par struct {
 	queues []*Queue
 }
 
-func (par *Par) Sched(f func()) {
-	shard := int(atomic.AddUint32(&par.round, 1)) % len(par.queues)
+func (par *Par) Sched(f func(), hash int) {
+	var shard int
+	if hash >= 0 {
+		shard = hash % len(par.queues)
+	} else {
+		shard = int(atomic.AddUint32(&par.round, 1)) % len(par.queues)
+	}
 	par.queues[shard].Sched(f)
 }
 

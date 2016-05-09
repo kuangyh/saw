@@ -32,3 +32,9 @@ func (jd JSONDecoder) DecodeValue(r io.Reader) (interface{}, error) {
 	}
 	return value, nil
 }
+
+func NewJSONDecoder(example interface{}) JSONDecoder {
+	return JSONDecoder{
+		ValueType: reflect.TypeOf(example).Elem(),
+	}
+}

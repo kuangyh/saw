@@ -26,11 +26,33 @@ type ResourceSpec struct {
 	NumShards int
 }
 
+const localMediaName = "local"
+
+func (rc *ResourceSpec) String() string {
+	var path = rc.Path
+	if rc.Media == localMediaName && path[0] != '/' {
+		path = "./" + path
+	}
+	if rc.Sharded() {
+		return fmt.Sprintf("%s:/%s%s@%d", rc.Format, rc.Media, path, rc.NumShards)
+	} else {
+		return fmt.Sprintf("%s:/%s%s", rc.Format, rc.Media, path)
+	}
+}
+
+func (rc *ResourceSpec) HasSpec() bool {
+	return len(rc.Format) > 0
+}
+
+func (rc *ResourceSpec) Sharded() bool {
+	return rc.NumShards > 0
+}
+
 func (rc *ResourceSpec) ShardPath(shard int) string {
-	if rc.NumShards == 0 {
+	if !rc.Sharded() {
 		return rc.Path
 	}
-	return fmt.Sprintf("%s-%05d-of-%05d", rc.Format, shard, rc.NumShards)
+	return fmt.Sprintf("%s-%05d-of-%05d", rc.Path, shard, rc.NumShards)
 }
 
 func (rc *ResourceSpec) IOReader(ctx context.Context, shard int) (io.ReadCloser, error) {
@@ -114,7 +136,7 @@ func ParseResourcePath(path string) (ResourceSpec, error) {
 	rc := ResourceSpec{Format: m[0][1]}
 
 	rc.Path = m[0][2]
-	rc.Media = "local"
+	rc.Media = localMediaName
 	if rc.Path[0] == '/' {
 		pair := strings.SplitN(rc.Path[1:], "/", 2)
 		if len(pair) == 2 {
@@ -126,7 +148,7 @@ func ParseResourcePath(path string) (ResourceSpec, error) {
 	}
 	if len(m[0][3]) > 0 {
 		var err error
-		rc.NumShards, err = strconv.Atoi(m[0][3])
+		rc.NumShards, err = strconv.Atoi(m[0][3][1:])
 		if err != nil {
 			return ResourceSpec{}, ErrMalformedPath
 		}

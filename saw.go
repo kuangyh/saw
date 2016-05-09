@@ -10,9 +10,8 @@ type DatumKey string
 // key must be string and value can by anything. The optional SortOrder
 // specifies optimal order when datums with same key get aggregated.
 type Datum struct {
-	Key       DatumKey
-	Value     interface{}
-	SortOrder uint64
+	Key   DatumKey
+	Value interface{}
 }
 
 // Saw is the basic computation unit, it's largely a state machine. Runtime

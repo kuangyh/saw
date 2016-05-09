@@ -12,9 +12,16 @@ import (
 	"golang.org/x/net/context"
 )
 
+// Speicify one data source of batch computation.
 type BatchSpec struct {
-	Input           storage.ResourceSpec
-	Topic           TopicID
+	// Reads data from here
+	Input storage.ResourceSpec
+	// Then data will be publish to this topic
+	Topic TopicID
+	// Use NumShards queues to call subscribers in parallel, it makes no sense
+	// if subscriber doesn't handle concurrent Emit().
+	// NumShards can be equal, smaller or larger than Input.NumShards, implementation
+	// make best effort to keep efficiency.
 	NumShards       int
 	QueueBufferSize int
 	// In re-saw, handler are often a table, provide KeyHashFunc allows pre-hash,
@@ -127,6 +134,12 @@ func runSingleBatch(spec BatchSpec, queueGroup *QueueGroup) {
 	wg.Wait()
 }
 
+// Run batch job, ingest all source data in parallel, returns after all data
+// are published to specified topic.
+//
+// It doesn't guaranttee Saw computation finishes --- in batch program, you must
+// call Result() for top level saws to make sure it fnishes computation and stores
+// data.
 func RunBatch(source ...BatchSpec) {
 	var queueGroup QueueGroup
 	var wg sync.WaitGroup

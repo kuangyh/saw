@@ -32,6 +32,12 @@ func (t *topic) emit(datum saw.Datum) {
 	t.countVar.Add(1)
 }
 
+// Hub is a simple pubsub to allow loosely coupled communication between saws
+// Saws can Register with topic(s) it subscribes to, or Publish datum to a topic.
+//
+// It's a simple local, sync implementation only for better pipeline program structure,
+// and it should keep it as it is. parallel, async computing, should be addressed
+// by Queues and Pars, implemented by each individual Saw.
 type Hub struct {
 	varPrefix     string
 	mu            sync.Mutex
@@ -47,6 +53,7 @@ func NewHub(varPrefix string) *Hub {
 	}
 }
 
+// Register saw that subscribes to a list of Topic
 func (hub *Hub) Register(saw saw.Saw, subscribes ...TopicID) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
@@ -61,6 +68,9 @@ func (hub *Hub) Register(saw saw.Saw, subscribes ...TopicID) {
 	}
 }
 
+// Publish to topic, resulting in emit to all saws subscirbed in sequence.
+// Concurrent calls to Publish() are not synchonized, subscribers is expected
+// to handle concurrent Emit()
 func (hub *Hub) Publish(id TopicID, datum saw.Datum) {
 	topic, ok := hub.topics[id]
 	if !ok {

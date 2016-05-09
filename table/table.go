@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-var InvalidTableSpecErr = errors.New("saw.table: invalid table spec")
+var ErrInvalidTableSpec = errors.New("saw.table: invalid table spec")
 
 type KeyHashFunc func(saw.DatumKey) int
 
@@ -17,6 +17,7 @@ type TableItemFactory func(tableName string, key saw.DatumKey) (saw.Saw, error)
 
 type TableResultMap map[saw.DatumKey]interface{}
 
+// TableSpec is shared configuration of Table implementations in this package.
 type TableSpec struct {
 	Name        string
 	ItemFactory TableItemFactory
@@ -28,10 +29,10 @@ type TableSpec struct {
 	// Defaults to 127
 	NumShards int
 
-	// When not empty, table state will be eventually persistent
+	// When not empty, table state will be stored at external storage.
 	PersistentResource storage.ResourceSpec
 	// It depends on table type to determine what data get persistent and what
-	// encoder to use. Defaults to verbatim (accepts and store []byte)
+	// encoder to use. Defaults to verbatim (accepts and stores []byte)
 	ValueEncoder saw.ValueEncoder
 	// Implementation may pre-allocate and reuse buffer for encoding values, to avoid
 	// frequent malloc, defaults to 4096
@@ -58,6 +59,9 @@ func fillSpecDefaults(spec *TableSpec) {
 	}
 }
 
+// SimpleTable is a in-memory, non-storable memory table, concurrent non-safe
+// table. Good for handling small set of data in mini-batch --- aggregate stats
+// for a single user session etc.
 type SimpleTable struct {
 	spec       TableSpec
 	items      map[saw.DatumKey]saw.Saw
@@ -115,6 +119,9 @@ func (tbl *SimpleTable) Result(ctx context.Context) (interface{}, error) {
 	return result, nil
 }
 
+// MemTable manages a set (spec.NumShards) of SimpleTables, provides concurrent
+// safe Emit(), stores finaly result when Result() called if there is a
+// spec.PersistentResource setting.
 type MemTable struct {
 	spec   TableSpec
 	shards []*SimpleTable

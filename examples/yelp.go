@@ -88,7 +88,7 @@ func init() {
 	runner.GlobalHub.Register(&yelpHandler, inputTopic)
 
 	bizSumTableOutput := storage.MustParseResourcePath(
-		"recordkv:/gs/xv-dev/yelp-data/output/bizSumTable.recordio")
+		"recordkv:/gs/xv-dev/output/bizSumTable.recordio")
 	bizSumTable = table.NewMemTable(table.TableSpec{
 		Name:               "bizSumTable",
 		PersistentResource: bizSumTableOutput,

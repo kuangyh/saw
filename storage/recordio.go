@@ -9,11 +9,15 @@ import (
 	"golang.org/x/net/context"
 )
 
-type recordIOFormat struct {
+// Format: recordio, recordkv
+// Reads and stores data using recordio format specified in github.com/kuangyh/recordio
+// recordkv stores one datum in two records: one for key and one for value.
+// recordio ignores datum.Key.
+type RecordIOFormat struct {
 	withKey bool
 }
 
-func (rf recordIOFormat) DatumReader(
+func (rf RecordIOFormat) DatumReader(
 	ctx context.Context, rc ResourceSpec, shard int) (DatumReader, error) {
 	f, err := rc.IOReader(ctx, shard)
 	if err != nil {
@@ -28,7 +32,7 @@ func (rf recordIOFormat) DatumReader(
 	}, nil
 }
 
-func (rf recordIOFormat) DatumWriter(
+func (rf RecordIOFormat) DatumWriter(
 	ctx context.Context, rc ResourceSpec, shard int) (DatumWriter, error) {
 	f, err := rc.IOWriter(ctx, shard)
 	if err != nil {
@@ -104,6 +108,6 @@ func (writer *recordIODatumWriter) Close() error {
 }
 
 func init() {
-	RegisterStorageFormat("recordio", recordIOFormat{withKey: false})
-	RegisterStorageFormat("recordkv", recordIOFormat{withKey: true})
+	RegisterStorageFormat("recordio", RecordIOFormat{withKey: false})
+	RegisterStorageFormat("recordkv", RecordIOFormat{withKey: true})
 }

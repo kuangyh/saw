@@ -10,12 +10,16 @@ import (
 	gcs "google.golang.org/api/storage/v1"
 )
 
-type gcsMedia struct {
+// Media: gs
+// Read / write from Google Cloud storage, your resource path looks like
+// format:/gs/bucket-name/object-name, sharding supported with recommended naming.
+// EXPERIMENTAL: bugs bugs.
+type GCSMedia struct {
 }
 
-func (gm gcsMedia) IOReader(
+func (gm GCSMedia) IOReader(
 	ctx context.Context, rc ResourceSpec, shard int) (io.ReadCloser, error) {
-	pair := strings.SplitN(rc.Path[1:], "/", 2)
+	pair := strings.SplitN(rc.ShardPath(shard)[1:], "/", 2)
 	if len(pair) != 2 {
 		return nil, ErrMalformedPath
 	}
@@ -46,9 +50,9 @@ func (wh *waitWriteHalf) Close() error {
 	return wh.err
 }
 
-func (gm gcsMedia) IOWriter(
+func (gm GCSMedia) IOWriter(
 	ctx context.Context, rc ResourceSpec, shard int) (io.WriteCloser, error) {
-	pair := strings.SplitN(rc.Path[1:], "/", 2)
+	pair := strings.SplitN(rc.ShardPath(shard)[1:], "/", 2)
 	if len(pair) != 2 {
 		return nil, ErrMalformedPath
 	}
@@ -77,5 +81,5 @@ func (gm gcsMedia) IOWriter(
 }
 
 func init() {
-	RegisterStorageMedia("gs", &gcsMedia{})
+	RegisterStorageMedia("gs", &GCSMedia{})
 }

@@ -36,6 +36,8 @@ func (shard *shardDatumWriter) Close() error {
 	return shard.internal.Close()
 }
 
+// Collect is a special table that it doesn't do any computation, but simply
+// stores everything it receives.
 type CollectTable struct {
 	spec     TableSpec
 	shards   []*shardDatumWriter
@@ -43,6 +45,12 @@ type CollectTable struct {
 	errVar   saw.VarInt
 }
 
+// Creates a new CollectTable, returns error when underling DatumWriter creation
+// fails.
+//
+// TableItemFactory and NumShards in TableSpec is no-op, # shards outputed is
+// soley determined by PersistentResource.NumShards
+//
 func NewCollectTable(ctx context.Context, spec TableSpec) (table *CollectTable, err error) {
 	fillSpecDefaults(&spec)
 

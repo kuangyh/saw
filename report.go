@@ -17,6 +17,10 @@ type VarFloat interface {
 
 var varLock sync.Mutex
 
+// Creates or fetches a int var for reporting, unlike its underling expvar,
+// ReportInt is expected to called when saws are dynamically created, in
+// TableItemFactory etc, so that or saws inside a single table can shares same
+// reporting metric.
 func ReportInt(ns, name string) VarInt {
 	varName := ns + "." + name
 	varLock.Lock()
@@ -28,6 +32,7 @@ func ReportInt(ns, name string) VarInt {
 	return expvar.NewInt(varName)
 }
 
+// Creates float var for reporting. see ReportInt() for usage detail.
 func ReportFloat(ns, name string) VarFloat {
 	varName := ns + "." + name
 	varLock.Lock()

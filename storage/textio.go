@@ -9,10 +9,12 @@ import (
 	"golang.org/x/net/context"
 )
 
-type textFormat struct {
+// Format: textio
+// Reads and writes data line by line. datum.Key is ignored.
+type TextFormat struct {
 }
 
-func (tf textFormat) DatumReader(
+func (tf TextFormat) DatumReader(
 	ctx context.Context, rc ResourceSpec, shard int) (DatumReader, error) {
 	f, err := rc.IOReader(ctx, shard)
 	if err != nil {
@@ -25,7 +27,7 @@ func (tf textFormat) DatumReader(
 	}, nil
 }
 
-func (tf textFormat) DatumWriter(
+func (tf TextFormat) DatumWriter(
 	ctx context.Context, rc ResourceSpec, shard int) (DatumWriter, error) {
 	f, err := rc.IOWriter(ctx, shard)
 	if err != nil {
@@ -69,5 +71,5 @@ func (dw *textDatumWriter) Close() error {
 }
 
 func init() {
-	RegisterStorageFormat("textio", textFormat{})
+	RegisterStorageFormat("textio", TextFormat{})
 }

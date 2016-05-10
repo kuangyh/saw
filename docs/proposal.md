@@ -43,8 +43,8 @@ Lots of progress had been made on data analysis tools --- including MR tools lat
 
 Log processing is:
 
-- Ingest dirty, heterogeneous data from various sources.
-- Convert, aggregate them into
+- Intesting dirty, heterogeneous data from various sources.
+- Convert, aggregate them into clean, homogeneous data that can be easily query by anlaysis program or SQL query engine like Dremel.
 
 ## Scalability
 

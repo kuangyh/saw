@@ -71,7 +71,7 @@ func (yh *YelpHandler) Result(ctx context.Context) (interface{}, error) {
 }
 
 var (
-	inputTopic        = runner.TopicID("input")
+	inputTopic        = saw.TopicID("input")
 	yelpHandler       YelpHandler
 	bizSumTable       saw.Saw
 	reviewByUserTable saw.Saw
@@ -85,7 +85,7 @@ func (se stringEncoder) EncodeValue(value interface{}, w io.Writer) (err error) 
 }
 
 func init() {
-	runner.GlobalHub.Register(&yelpHandler, inputTopic)
+	saw.GlobalHub.Register(&yelpHandler, inputTopic)
 
 	bizSumTableOutput := storage.MustParseResourcePath(
 		"recordkv:/gs/xv-dev/output/bizSumTable.recordio")

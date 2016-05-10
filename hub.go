@@ -1,31 +1,29 @@
-package runner
+package saw
 
 import (
 	"sync"
-
-	"github.com/kuangyh/saw"
 )
 
 type TopicID string
 
 type topic struct {
 	id          TopicID
-	subscribers []saw.Saw
-	countVar    saw.VarInt
+	subscribers []Saw
+	countVar    VarInt
 }
 
 func newTopic(varPrefix string, id TopicID) *topic {
 	return &topic{
 		id:       id,
-		countVar: saw.ReportInt(varPrefix+"."+string(id), "count"),
+		countVar: ReportInt(varPrefix+"."+string(id), "count"),
 	}
 }
 
-func (t *topic) addSubscriber(saw saw.Saw) {
+func (t *topic) addSubscriber(saw Saw) {
 	t.subscribers = append(t.subscribers, saw)
 }
 
-func (t *topic) emit(datum saw.Datum) {
+func (t *topic) emit(datum Datum) {
 	for _, saw := range t.subscribers {
 		saw.Emit(datum)
 	}
@@ -42,19 +40,19 @@ type Hub struct {
 	varPrefix     string
 	mu            sync.Mutex
 	topics        map[TopicID]*topic
-	deadLetterVar saw.VarInt
+	deadLetterVar VarInt
 }
 
 func NewHub(varPrefix string) *Hub {
 	return &Hub{
 		varPrefix:     varPrefix,
 		topics:        make(map[TopicID]*topic),
-		deadLetterVar: saw.ReportInt(varPrefix+".DEAD", "count"),
+		deadLetterVar: ReportInt(varPrefix+".DEAD", "count"),
 	}
 }
 
 // Register saw that subscribes to a list of Topic
-func (hub *Hub) Register(saw saw.Saw, subscribes ...TopicID) {
+func (hub *Hub) Register(saw Saw, subscribes ...TopicID) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
 
@@ -71,7 +69,7 @@ func (hub *Hub) Register(saw saw.Saw, subscribes ...TopicID) {
 // Publish to topic, resulting in emit to all saws subscirbed in sequence.
 // Concurrent calls to Publish() are not synchonized, subscribers is expected
 // to handle concurrent Emit()
-func (hub *Hub) Publish(id TopicID, datum saw.Datum) {
+func (hub *Hub) Publish(id TopicID, datum Datum) {
 	topic, ok := hub.topics[id]
 	if !ok {
 		hub.deadLetterVar.Add(1)

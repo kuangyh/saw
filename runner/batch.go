@@ -17,7 +17,7 @@ type BatchSpec struct {
 	// Reads data from here
 	Input storage.ResourceSpec
 	// Then data will be publish to this topic
-	Topic TopicID
+	Topic saw.TopicID
 	// Use NumShards queues to call subscribers in parallel, it makes no sense
 	// if subscriber doesn't handle concurrent Emit().
 	// NumShards can be equal, smaller or larger than Input.NumShards, implementation
@@ -34,7 +34,7 @@ type shardRunner struct {
 	index    int
 	hashFunc table.KeyHashFunc
 
-	topic TopicID
+	topic saw.TopicID
 	par   *Par
 }
 
@@ -67,7 +67,7 @@ func (runner *shardRunner) run() {
 
 func (runner *shardRunner) sched(datum saw.Datum, hash int) {
 	runner.par.Sched(func() {
-		GlobalHub.Publish(runner.topic, datum)
+		saw.GlobalHub.Publish(runner.topic, datum)
 	}, hash)
 }
 

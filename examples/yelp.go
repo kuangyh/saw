@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/kuangyh/saw"
+	"github.com/kuangyh/saw/aggregator"
 	"github.com/kuangyh/saw/runner"
 	"github.com/kuangyh/saw/storage"
 	"github.com/kuangyh/saw/table"
@@ -23,23 +24,6 @@ type YelpReview struct {
 	Text   string  `json:"text"`
 }
 
-type Sum struct {
-	curr float64
-}
-
-func (sum *Sum) Emit(datum saw.Datum) error {
-	sum.curr += datum.Value.(float64)
-	return nil
-}
-
-func (sum *Sum) Result(ctx context.Context) (interface{}, error) {
-	return sum.curr, nil
-}
-
-func SumItemFactory(name string, key saw.DatumKey) (saw.Saw, error) {
-	return &Sum{}, nil
-}
-
 type YelpHandler struct{}
 
 func (yh *YelpHandler) parseReview(datum saw.Datum) YelpReview {
@@ -55,7 +39,7 @@ func (yh *YelpHandler) Emit(datum saw.Datum) error {
 	review := yh.parseReview(datum)
 	bizSumTable.Emit(saw.Datum{
 		Key:   saw.DatumKey(review.BizId),
-		Value: float64(1),
+		Value: aggregator.Metric(1),
 	})
 	// for i := 0; i < 5; i++ {
 	reviewByUserTable.Emit(saw.Datum{
@@ -92,7 +76,7 @@ func init() {
 	bizSumTable = table.NewMemTable(table.TableSpec{
 		Name:               "bizSumTable",
 		PersistentResource: bizSumTableOutput,
-		ItemFactory:        SumItemFactory,
+		ItemFactory:        table.ItemFactoryOf(&aggregator.Sum{}),
 		ValueEncoder:       saw.JSONEncoder{},
 	})
 

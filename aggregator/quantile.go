@@ -1,15 +1,18 @@
 package aggregator
 
 import (
-	"errors"
 	"sort"
 
 	"github.com/kuangyh/saw"
 	"golang.org/x/net/context"
 )
 
-var ErrNotMergeable = errors.New("two quantile states not mergeable")
-
+// QuantileState implements online quantile calculation with O(LogN) space compleixty,
+// based on http://infolab.stanford.edu/~datar/courses/cs361a/papers/quantiles.pdf
+//
+// User should use NewQuantile() to create a QuantileSaw intead of using QuantileState
+// directly, unless user wants to use quantile calculation as part of their aggregation
+// algorithm.
 type QuantileState struct {
 	bufferSize   int
 	leaf         []Metric
@@ -142,13 +145,6 @@ func (ws weightedMetricSort) Len() int           { return len(ws) }
 func (ws weightedMetricSort) Less(i, j int) bool { return ws[i].metric < ws[j].metric }
 func (ws weightedMetricSort) Swap(i, j int)      { t := ws[i]; ws[i] = ws[j]; ws[j] = t }
 
-type Quantile struct {
-	total    int
-	min      Metric
-	max      Metric
-	queryBuf []weightedMetric
-}
-
 func (qs *QuantileState) Result() Quantile {
 	var queryBuf []weightedMetric
 	total := 0
@@ -172,6 +168,17 @@ func (qs *QuantileState) Result() Quantile {
 	}
 }
 
+// Quantile is a snapshot of QuantileState that provides query interface for getting
+// quantile metrics.
+type Quantile struct {
+	total    int
+	min      Metric
+	max      Metric
+	queryBuf []weightedMetric
+}
+
+// Get quantile of point ratio between 0..1. min value returned for ratio=0,
+// max value for ratio=1, estimated quantile for ratios in between.
 func (q *Quantile) At(ratio float64) Metric {
 	if ratio <= 0.0 {
 		return q.min
@@ -190,6 +197,12 @@ func (q *Quantile) At(ratio float64) Metric {
 	return q.max
 }
 
+// Get quantile list for buckets.
+//
+// when numBuckets <= 1, only min and max are returned, otherwise, a slice with
+// length numBucket+1 returns, with min, quantile for each bucket and max.
+//
+// Example: numBuckets = 2 returns [min, median, max]
 func (q *Quantile) Get(numBuckets int) []Metric {
 	if numBuckets <= 1 {
 		return []Metric{q.min, q.max}
@@ -216,6 +229,7 @@ func (q *Quantile) Get(numBuckets int) []Metric {
 	return output
 }
 
+// QuantileSaw wraps QuantileState to provide Saw interface.
 type QuantileSaw struct {
 	state *QuantileState
 }
@@ -225,6 +239,7 @@ func (s *QuantileSaw) Emit(datum saw.Datum) error {
 	return nil
 }
 
+// Returns Quantile
 func (s *QuantileSaw) Result(ctx context.Context) (interface{}, error) {
 	return s.state.Result(), nil
 }
@@ -233,7 +248,16 @@ func (s *QuantileSaw) MergeFrom(other saw.Saw) error {
 	return s.state.MergeFrom(other.(*QuantileSaw).state)
 }
 
-func NewQuantile(desireNumBuckets int, sampleRate float64) *QuantileSaw {
-	bufferSize := int(float64(desireNumBuckets) / sampleRate)
+// Creates a new QuantileSaw, desiresNumBuckets and samplesPerBucket determines
+// bufferSize of QuantileState.
+//
+// desireNumBuckets is the # buckets you will query against saw result,
+// samplesPerBucket is minimum # of samples you want to use to calculate a single
+// quantile bucket, 10 is enough for most cases.
+//
+// Plan memory usage with formula:
+// (log(# samples) + 1) * desireNumBuckets * samplesPerBucket.
+func NewQuantile(desireNumBuckets int, samplesPerBucket int) *QuantileSaw {
+	bufferSize := int(desireNumBuckets * samplesPerBucket)
 	return &QuantileSaw{state: NewQuantileState(bufferSize)}
 }

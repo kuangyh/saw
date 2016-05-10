@@ -6,6 +6,7 @@ import (
 	"github.com/kuangyh/saw/storage"
 	"golang.org/x/net/context"
 	"hash/fnv"
+	"reflect"
 	"sync"
 )
 
@@ -14,6 +15,15 @@ var ErrInvalidTableSpec = errors.New("saw.table: invalid table spec")
 type KeyHashFunc func(saw.DatumKey) int
 
 type TableItemFactory func(tableName string, key saw.DatumKey) (saw.Saw, error)
+
+// A simple item factory that creates zero value (not copy!) instance of saw type
+// in paramter, panic if saw is not pointer receiver.
+func ItemFactoryOf(example saw.Saw) TableItemFactory {
+	instanceType := reflect.TypeOf(example).Elem()
+	return func(tableName string, key saw.DatumKey) (saw.Saw, error) {
+		return reflect.New(instanceType).Interface().(saw.Saw), nil
+	}
+}
 
 type TableResultMap map[saw.DatumKey]interface{}
 

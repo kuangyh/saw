@@ -5,6 +5,9 @@ import (
 	"sync/atomic"
 )
 
+// Default schedule strategy of Par.
+const SchedRoundRobin = -1
+
 // Queue runs function scheduled in a seperate gorountine. Normally you don't
 // need to explicitly create or use Queue, Par / Tables implicitly create queues
 // and schedule user-defined Saws to some of them.
@@ -33,12 +36,16 @@ func (q *Queue) Sched(f func()) {
 }
 
 // Par manages a set of queues, when Sched, it puts task into one of them using
-// round-robin
+// hash or round-robin
 type Par struct {
 	round  uint32
 	queues []*Queue
 }
 
+// Schedule a function to run in one of Par's queues, returns after inserted in
+// queue. when hash < 0, schedule select queue by round-robin, otherwise, it
+// selects specific queue by hash. hash is just an optimization to minimize
+// contention, caller should not relie on queue selecting behavior.
 func (par *Par) Sched(f func(), hash int) {
 	var shard int
 	if hash >= 0 {

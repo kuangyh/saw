@@ -15,15 +15,26 @@ type Datum struct {
 }
 
 // Saw is the basic computation unit, it's largely a state machine.
+//
+// In general, implementation should allow concurrent call to Emit() for good
+// parallelism, it can be archive by having a stateless saw (see Transfrom), or
+// make it managed by concurrent tables like table.MemTable (see table subpackage).
 type Saw interface {
-	// Feeds a new data point into Saw, implementation should allow concurrent call
-	// for this method, or use Queue / Par / Table / Transform to manage concurrency.
+	// Feeds a new data point into Saw.
 	Emit(v Datum) error
 
-	// Returning computation result based on current state, this can take long if
-	// Saw does reduce computation or wait for other saws, so a context with timeout
-	// is passed in for early cancelation
-	//
-	// Implementation should expect same concurrency assumption as Emit()
+	// Release all resources and returns final computation result.
 	Result(ctx context.Context) (interface{}, error)
+}
+
+// Saw can optionally provide Export() interface, it provides a snapshot of its
+// current state, which can be later merged to another saw
+type ExportSaw interface {
+	Export() (interface{}, error)
+}
+
+// Saw can merge Export() result of other saws, so that Saws can be aggregated
+// or migrated between instances
+type MergeSaw interface {
+	MergeFrom(other interface{}) error
 }

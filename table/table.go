@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"reflect"
 	"sync"
+	"sync/atomic"
 )
 
 var ErrInvalidTableSpec = errors.New("saw.table: invalid table spec")
@@ -25,7 +26,23 @@ func ItemFactoryOf(example saw.Saw) TableItemFactory {
 	}
 }
 
+// SimpleTable and MemTable result type
 type TableResultMap map[saw.DatumKey]interface{}
+
+type InspectCallback func(key saw.DatumKey, item saw.Saw) error
+
+// Inspectable tables allows a callback to inspect one, a set of, or all saws
+// in the table, table gurantees no concurrent Emit() for the saw being inspected.
+//
+// InspectSet() and InspectAll() can inspect items in parallel when concurrent=true.
+// All inspect functions return number of items been inspected without error, and
+// one of the error callback returned if there's any, inspect functions stops as
+// soon as it encounter error.
+type Inspectable interface {
+	Inspect(key saw.DatumKey, callback InspectCallback) (inspected int, err error)
+	InspectSet(keys []saw.DatumKey, callback InspectCallback, concurrent bool) (inspected int, err error)
+	InspectAll(callback InspectCallback, concurrent bool) (inspected int, err error)
+}
 
 // TableSpec is shared configuration of Table implementations in this package.
 type TableSpec struct {
@@ -113,20 +130,59 @@ func (tbl *SimpleTable) Emit(kv saw.Datum) (err error) {
 	return err
 }
 
+func (tbl *SimpleTable) Inspect(key saw.DatumKey, callback InspectCallback) (int, error) {
+	saw, ok := tbl.items[key]
+	if !ok {
+		return 0, nil
+	}
+	if err := callback(key, saw); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+func (tbl *SimpleTable) InspectSet(
+	keys []saw.DatumKey, callback InspectCallback, concurrent bool) (int, error) {
+	total := 0
+	for _, key := range keys {
+		n, err := tbl.Inspect(key, callback)
+		total += n
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+func (tbl *SimpleTable) InspectAll(callback InspectCallback, concurrent bool) (int, error) {
+	total := 0
+	for key, saw := range tbl.items {
+		err := callback(key, saw)
+		if err != nil {
+			return total, err
+		}
+		total += 1
+	}
+	return total, nil
+}
+
+// Returns TableResultMap, each item as Result() of item saw. nil item results are ignored.
+//
+// When error presents in individual items Result(), it still tries  to get results
+// of all others, then a partial result and one of the item result error will be
+// returned.
 func (tbl *SimpleTable) Result(ctx context.Context) (interface{}, error) {
 	result := make(TableResultMap)
+	var err error
 	for key, saw := range tbl.items {
-		var err error
-		v, err := saw.Result(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if v == nil {
+		var v interface{}
+		v, err = saw.Result(ctx)
+		if v == nil || err != nil {
 			continue
 		}
 		result[key] = v
 	}
-	return result, nil
+	return result, err
 }
 
 // MemTable manages a set (spec.NumShards) of SimpleTables, provides concurrent
@@ -159,35 +215,130 @@ func (tbl *MemTable) Emit(kv saw.Datum) error {
 	return simpleTable.Emit(kv)
 }
 
-func (tbl *MemTable) Result(ctx context.Context) (result interface{}, err error) {
-	resultMap := make(TableResultMap)
+func (tbl *MemTable) forEachShard(
+	callback func(shardIdx int, shard *SimpleTable) error, concurrent bool, stopWhenErr bool) error {
+	if !concurrent {
+		var lastErr error
+		for i, shard := range tbl.shards {
+			tbl.locks[i].Lock()
+			err := callback(i, shard)
+			tbl.locks[i].Unlock()
+			if err != nil {
+				if stopWhenErr {
+					return err
+				}
+				lastErr = err
+			}
+		}
+		return lastErr
+	} else {
+		var collectedErr atomic.Value
+		var wg sync.WaitGroup
+		for i, shard := range tbl.shards {
+			wg.Add(1)
+			go func(shardIdx int, shard *SimpleTable) {
+				defer wg.Done()
+				tbl.locks[shardIdx].Lock()
+				defer tbl.locks[shardIdx].Unlock()
+				err := callback(shardIdx, shard)
+				if err != nil {
+					collectedErr.Store(err)
+				}
+			}(i, shard)
+		}
+		wg.Wait()
+		if err := collectedErr.Load(); err != nil {
+			return err.(error)
+		}
+		return nil
+	}
+}
 
+func (tbl *MemTable) Inspect(key saw.DatumKey, callback InspectCallback) (int, error) {
+	shardIdx := tbl.spec.KeyHashFunc(key) % len(tbl.shards)
+	tbl.locks[shardIdx].Lock()
+	defer tbl.locks[shardIdx].Unlock()
+	return tbl.shards[shardIdx].Inspect(key, callback)
+}
+
+func (tbl *MemTable) InspectSet(
+	keys []saw.DatumKey, callback InspectCallback, concurrent bool) (int, error) {
+	// TODO(yuheng): that's slow when key set are small, implement fast path if we need.
+	keysByShard := make([][]saw.DatumKey, len(tbl.shards))
+	for _, key := range keys {
+		shardIdx := tbl.spec.KeyHashFunc(key) % len(tbl.shards)
+		keysByShard[shardIdx] = append(keysByShard[shardIdx], key)
+	}
+	var total int64
+	err := tbl.forEachShard(func(shardIdx int, shard *SimpleTable) error {
+		shardTotal, err := shard.InspectSet(keysByShard[shardIdx], callback, concurrent)
+		atomic.AddInt64(&total, int64(shardTotal))
+		return err
+	}, concurrent, true)
+	return int(total), err
+}
+
+func (tbl *MemTable) InspectAll(callback InspectCallback, concurrent bool) (int, error) {
+	var total int64
+	err := tbl.forEachShard(func(shardIdx int, shard *SimpleTable) error {
+		shardTotal, err := shard.InspectAll(callback, concurrent)
+		atomic.AddInt64(&total, int64(shardTotal))
+		return err
+	}, concurrent, true)
+	return int(total), err
+}
+
+// Returns TableResultMap, each item as Result() of item saw. nil item results are ignored.
+//
+// When error presents in individual items Result(), it still tries  to get results
+// of all others, then a partial result and one of the item result error will be
+// returned.
+//
+// When tbl.spec.PersistentResource set, results will be write to persistent store,
+// all items' Result() will still be called when persistent fails.
+func (tbl *MemTable) Result(ctx context.Context) (interface{}, error) {
+	var finalErr error
 	var collectTable *CollectTable
 	if tbl.spec.PersistentResource.HasSpec() {
 		collectTableSpec := tbl.spec
 		collectTableSpec.Name = collectTableSpec.Name + "_collect"
+		var err error
 		collectTable, err = NewCollectTable(ctx, collectTableSpec)
 		if err != nil {
-			return nil, err
+			finalErr = err
+		} else {
+			defer collectTable.Result(ctx)
 		}
-		defer collectTable.Result(ctx)
 	}
 
-	for shardIdx, st := range tbl.shards {
-		tbl.locks[shardIdx].Lock()
-		shardRet, err := st.Result(ctx)
-		tbl.locks[shardIdx].Unlock()
-		if err != nil {
-			return nil, err
+	retByShard := make([]TableResultMap, len(tbl.shards))
+	err := tbl.forEachShard(func(shardIdx int, shard *SimpleTable) error {
+		var lastErr error
+		shardRet, lastErr := shard.Result(ctx)
+		if shardRet != nil {
+			retByShard[shardIdx] = shardRet.(TableResultMap)
 		}
-		for k, v := range shardRet.(TableResultMap) {
-			resultMap[k] = v
-			if collectTable != nil {
-				if err = collectTable.Emit(saw.Datum{Key: k, Value: v}); err != nil {
-					return nil, err
+		if collectTable != nil {
+			for k, v := range retByShard[shardIdx] {
+				if err := collectTable.Emit(saw.Datum{Key: k, Value: v}); err != nil {
+					lastErr = err
 				}
 			}
 		}
+		return lastErr
+	}, true, false)
+	if err != nil {
+		finalErr = err
 	}
-	return resultMap, nil
+
+	resultMap := make(TableResultMap)
+	for _, m := range retByShard {
+		if m == nil {
+			continue
+		}
+		for k, v := range m {
+			resultMap[k] = v
+		}
+	}
+	return resultMap, finalErr
 }

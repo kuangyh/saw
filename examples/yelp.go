@@ -71,7 +71,7 @@ func init() {
 	})
 
 	reviewByUserTableOutput := storage.MustParseResourcePath(
-		"recordkv:/gs/xv-dev/output/reviewByUserTable.recordio@64")
+		"recordkv:reviewByUserTable.recordio@64")
 	var err error
 	if reviewByUserTable, err = table.NewCollectTable(context.Background(), table.TableSpec{
 		Name:               "reviewByUserTable",

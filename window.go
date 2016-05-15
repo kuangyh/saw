@@ -27,9 +27,9 @@ type WindowSpec struct {
 	MaxSeqAdvance int
 }
 
-// Window implements a sliding window of saws. Window keeps finite set of frames,
-// each corresponded with a SeqID. Window keeps WindowSpec.WindowSize of latest
-// frames with largest, contintued SeqID.
+// Window implements a sliding window of saws. Window keeps finite set of saws,
+// called frames, each corresponded with a SeqID. Window keeps WindowSpec.WindowSize
+// of latest frames with largest, contintued SeqID.
 //
 // For every input, it calls WindowSpec.SeqFunc to get SeqID of a datum and route
 // it to the frame if it's still in sliding window. Window assumes datum's SeqID
@@ -62,10 +62,10 @@ func NewWindow(spec WindowSpec) *Window {
 	}
 }
 
-func (win *Window) asyncFinalize(seq SeqID, frame Saw) {
+func (win *Window) asyncFinalize(ctx context.Context, seq SeqID, frame Saw) {
 	win.finalizeWg.Add(1)
 	go func() {
-		frame.Result(context.Background())
+		frame.Result(ctx)
 		win.finalizeWg.Done()
 	}()
 }
@@ -125,7 +125,7 @@ func (win *Window) prepareFrame(datum Datum) (frame Saw, err error) {
 			frame := win.frames[frameIdx]
 			if frame != nil {
 				win.frames[frameIdx] = nil
-				win.asyncFinalize(win.startSeq.Advance(i), frame)
+				win.asyncFinalize(context.Background(), win.startSeq.Advance(i), frame)
 			}
 		}
 		win.startSeq = seq.Advance(1 - winSize)
@@ -133,7 +133,7 @@ func (win *Window) prepareFrame(datum Datum) (frame Saw, err error) {
 	} else {
 		for i := 0; i < offset-winSize; i++ {
 			if win.frames[win.startIdx] != nil {
-				win.asyncFinalize(win.startSeq, win.frames[win.startIdx])
+				win.asyncFinalize(context.Background(), win.startSeq, win.frames[win.startIdx])
 				win.frames[win.startIdx] = nil
 			}
 			win.startIdx = win.indexForOffset(1)
@@ -166,7 +166,7 @@ func (win *Window) Result(ctx context.Context) (result interface{}, err error) {
 		frame := win.frames[frameIdx]
 		if frame != nil {
 			win.frames[frameIdx] = nil
-			win.asyncFinalize(win.startSeq.Advance(i), frame)
+			win.asyncFinalize(ctx, win.startSeq.Advance(i), frame)
 		}
 	}
 	win.startSeq = 0

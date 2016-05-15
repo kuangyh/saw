@@ -6,24 +6,46 @@ import (
 	"golang.org/x/net/context"
 )
 
-type WindowSeqFunc func(datum Datum) int
-type WindowFrameFactory func(name string, seq int) (Saw, error)
+type SeqID int
+
+func (seq SeqID) Advance(x int) SeqID {
+	return SeqID(int(seq) + x)
+}
+
+func (seq SeqID) DistanceFrom(other SeqID) int {
+	return int(seq - other)
+}
+
+type DatumSeqFunc func(datum Datum) SeqID
+type WindowFrameFactory func(name string, seq SeqID) (Saw, error)
 
 type WindowSpec struct {
 	Name          string
 	FrameFactory  WindowFrameFactory
-	SeqFunc       WindowSeqFunc
+	SeqFunc       DatumSeqFunc
 	WindowSize    int
 	MaxSeqAdvance int
 }
 
+// Window implements a sliding window of saws. Window keeps finite set of frames,
+// each corresponded with a SeqID. Window keeps WindowSpec.WindowSize of latest
+// frames with largest, contintued SeqID.
+//
+// For every input, it calls WindowSpec.SeqFunc to get SeqID of a datum and route
+// it to the frame if it's still in sliding window. Window assumes datum's SeqID
+// are dense, rougly incremental overtime, or you will get too many datums dropped.
+//
+// When window needed to be slided, Result() of old frames will be called in their
+// seperate gorountines. In Window.Result(), all frames' Result() will be called
+// in this maner as they all been slide away. Window doesn't care frame's Result()
+// return.
 type Window struct {
 	spec WindowSpec
 
 	mu        sync.Mutex
 	frames    []Saw
-	startSeq  int
-	latestSeq int
+	startSeq  SeqID
+	latestSeq SeqID
 	startIdx  int
 	hasData   bool
 
@@ -40,12 +62,20 @@ func NewWindow(spec WindowSpec) *Window {
 	}
 }
 
-func (win *Window) asyncFinalize(seq int, frame Saw) {
+func (win *Window) asyncFinalize(seq SeqID, frame Saw) {
 	win.finalizeWg.Add(1)
 	go func() {
 		frame.Result(context.Background())
 		win.finalizeWg.Done()
 	}()
+}
+
+func (win *Window) indexForSeq(seq SeqID) int {
+	return (win.startIdx + seq.DistanceFrom(win.startSeq)) % len(win.frames)
+}
+
+func (win *Window) indexForOffset(offset int) int {
+	return (win.startIdx + offset) % len(win.frames)
 }
 
 // returning Saw nullable indicating drop
@@ -65,20 +95,22 @@ func (win *Window) prepareFrame(datum Datum) (frame Saw, err error) {
 		win.hasData = true
 		return frame, nil
 	}
-	advance := seq - win.startSeq
-	// Out of window
-	if advance < 0 || (win.spec.MaxSeqAdvance > 0 && advance > win.spec.MaxSeqAdvance) {
+	offset := seq.DistanceFrom(win.startSeq)
+	// Out of window, drop
+	if offset < 0 || (win.spec.MaxSeqAdvance > 0 && offset > win.spec.MaxSeqAdvance) {
+		win.droppedCount.Add(1)
 		return nil, nil
 	}
-	if advance < len(win.frames) {
-		idx := (win.startIdx + advance) % len(win.frames)
-		if win.frames[idx] == nil {
-			win.frames[idx], err = win.spec.FrameFactory(win.spec.Name, seq)
+	winSize := len(win.frames)
+	if offset < winSize {
+		frameIdx := win.indexForOffset(offset)
+		if win.frames[frameIdx] == nil {
+			win.frames[frameIdx], err = win.spec.FrameFactory(win.spec.Name, seq)
 			if err != nil {
 				return nil, err
 			}
 		}
-		return win.frames[idx], nil
+		return win.frames[frameIdx], nil
 	}
 	frame, err = win.spec.FrameFactory(win.spec.Name, seq)
 	if err != nil {
@@ -87,31 +119,29 @@ func (win *Window) prepareFrame(datum Datum) (frame Saw, err error) {
 	if seq > win.latestSeq {
 		win.latestSeq = seq
 	}
-	if advance >= len(win.frames)*2 {
-		for i := 0; i < len(win.frames); i++ {
-			frameIdx := (win.startIdx + i) % len(win.frames)
+	if offset >= winSize*2 {
+		for i := 0; i < winSize; i++ {
+			frameIdx := win.indexForOffset(i)
 			frame := win.frames[frameIdx]
 			if frame != nil {
 				win.frames[frameIdx] = nil
-				win.asyncFinalize(win.startSeq+i, frame)
+				win.asyncFinalize(win.startSeq.Advance(i), frame)
 			}
 		}
-		win.startSeq = seq - len(win.frames) + 1
+		win.startSeq = seq.Advance(1 - winSize)
 		win.startIdx = 0
-		win.frames[len(win.frames)-1] = frame
-		return frame, nil
 	} else {
-		for i := 0; i < advance-len(win.frames); i++ {
+		for i := 0; i < offset-winSize; i++ {
 			if win.frames[win.startIdx] != nil {
 				win.asyncFinalize(win.startSeq, win.frames[win.startIdx])
 				win.frames[win.startIdx] = nil
 			}
-			win.startIdx = (win.startIdx + 1) % len(win.frames)
+			win.startIdx = win.indexForOffset(1)
 			win.startSeq++
 		}
-		win.frames[(win.startIdx+(seq-win.startSeq))%len(win.frames)] = frame
-		return frame, nil
 	}
+	win.frames[win.indexForSeq(seq)] = frame
+	return frame, nil
 }
 
 func (win *Window) Emit(datum Datum) error {
@@ -126,15 +156,17 @@ func (win *Window) Emit(datum Datum) error {
 	return frame.Emit(datum)
 }
 
+// Result finalize all frames it's currently managing, returns after all frames
+// sent for finalize finishes, including previous ones caused by sliding.
 func (win *Window) Result(ctx context.Context) (result interface{}, err error) {
 	win.mu.Lock()
 	defer win.mu.Unlock()
 	for i := 0; i < len(win.frames); i++ {
-		frameIdx := (win.startIdx + i) % len(win.frames)
+		frameIdx := win.indexForOffset(i)
 		frame := win.frames[frameIdx]
 		if frame != nil {
 			win.frames[frameIdx] = nil
-			win.asyncFinalize(win.startSeq+i, frame)
+			win.asyncFinalize(win.startSeq.Advance(i), frame)
 		}
 	}
 	win.startSeq = 0
@@ -145,27 +177,31 @@ func (win *Window) Result(ctx context.Context) (result interface{}, err error) {
 	return nil, nil
 }
 
-func (win *Window) LatestFrame() (seq int, frame Saw) {
+// Gets the latest frame or nil when there's no data yet. returned frame is not
+// locked, would be Emit()-ing or even Result()-ing when caller gets the return.
+func (win *Window) LatestFrame() (seq SeqID, frame Saw) {
 	win.mu.Lock()
 	defer win.mu.Unlock()
 
 	if !win.hasData {
 		return 0, nil
 	}
-	return win.latestSeq, win.frames[(win.startIdx+win.latestSeq-win.startSeq)%len(win.frames)]
+	return win.latestSeq, win.frames[win.indexForSeq(win.latestSeq)]
 }
 
-func (win *Window) AllFrames() map[int]Saw {
+// Gets the all frame the Window currently holds. returned frames are not locked,
+// would be Emit()-ing or even Result()-ing when caller gets the return.
+func (win *Window) AllFrames() map[SeqID]Saw {
 	win.mu.Lock()
 	defer win.mu.Unlock()
-	output := make(map[int]Saw)
+	output := make(map[SeqID]Saw)
 	if !win.hasData {
 		return output
 	}
 	for i := 0; i < len(win.frames); i++ {
-		frame := win.frames[(win.startIdx+i)%len(win.frames)]
+		frame := win.frames[win.indexForOffset(i)]
 		if frame != nil {
-			output[win.startSeq+i] = frame
+			output[win.startSeq.Advance(i)] = frame
 		}
 	}
 	return output

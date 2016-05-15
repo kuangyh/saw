@@ -32,7 +32,10 @@ type TableResultMap map[saw.DatumKey]interface{}
 type InspectCallback func(key saw.DatumKey, item saw.Saw) error
 
 // Inspectable tables allows a callback to inspect one, a set of, or all saws
-// in the table, table gurantees no concurrent Emit() for the saw being inspected.
+// in the table, table gurantees no concurrent Emit() for the saw being inspected,
+// but other items not being currently being inspected could still receive Emit()
+// concurrently, that means you cannot get a consistent snapshot of table using
+// InspectAll().
 //
 // InspectSet() and InspectAll() can inspect items in parallel when concurrent=true.
 // All inspect functions return number of items been inspected without error, and
@@ -87,8 +90,9 @@ func fillSpecDefaults(spec *TableSpec) {
 }
 
 // SimpleTable is a in-memory, non-storable memory table, concurrent non-safe
-// table. Good for handling small set of data in mini-batch --- aggregate stats
-// for a single user session etc.
+// table --- it assumes you call all its methods sequentially. Good for handling
+// small set of data in mini-batch --- aggregate stats for a single user session
+// etc.
 type SimpleTable struct {
 	spec       TableSpec
 	items      map[saw.DatumKey]saw.Saw

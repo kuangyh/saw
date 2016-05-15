@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/kuangyh/saw"
 	"github.com/kuangyh/saw/aggregator"
@@ -26,17 +25,8 @@ type YelpReview struct {
 
 type YelpHandler struct{}
 
-func (yh *YelpHandler) parseReview(datum saw.Datum) YelpReview {
-	line := datum.Value.([]byte)
-	review := YelpReview{}
-	if err := json.Unmarshal(line, &review); err != nil {
-		log.Panic(err)
-	}
-	return review
-}
-
 func (yh *YelpHandler) Emit(datum saw.Datum) error {
-	review := yh.parseReview(datum)
+	review := datum.Value.(*YelpReview)
 	bizSumTable.Emit(saw.Datum{
 		Key:   saw.DatumKey(review.BizId),
 		Value: aggregator.Metric(1),
@@ -97,10 +87,11 @@ func main() {
 	}()
 
 	batch := runner.BatchSpec{
-		Input:           storage.MustParseResourcePath("textio:/gs/xv-dev/yelp-data/review.log"),
-		Topic:           inputTopic,
-		NumShards:       64,
-		QueueBufferSize: 1000,
+		Input:             storage.MustParseResourcePath("textio:/gs/xv-dev/yelp-data/review.log"),
+		InputValueDecoder: saw.NewJSONDecoder(&YelpReview{}),
+		Topic:             inputTopic,
+		NumShards:         64,
+		QueueBufferSize:   1000,
 	}
 
 	startTime := time.Now()

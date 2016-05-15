@@ -1,7 +1,6 @@
 package table
 
 import (
-	"bytes"
 	"github.com/kuangyh/saw"
 	"github.com/kuangyh/saw/storage"
 	"golang.org/x/net/context"
@@ -22,12 +21,12 @@ func (shard *shardDatumWriter) WriteDatum(datum saw.Datum) (err error) {
 	defer shard.mu.Unlock()
 
 	if shard.valueEncoder != nil {
-		buf := bytes.NewBuffer(shard.encodeBuffer)
-		buf.Reset()
-		if err = shard.valueEncoder.EncodeValue(datum.Value, buf); err != nil {
+		var encoded []byte
+		encoded, err = shard.valueEncoder.EncodeValue(datum.Value, shard.encodeBuffer)
+		if err != nil {
 			return err
 		}
-		datum.Value = buf.Bytes()
+		datum.Value = encoded
 	}
 	return shard.internal.WriteDatum(datum)
 }

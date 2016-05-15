@@ -14,12 +14,10 @@ type Datum struct {
 	Value interface{}
 }
 
-// Saw is the basic computation unit, it's largely a state machine. Runtime
-// garunteees that all its methods are called in serial (not neccessary on same
-// thread / goroutine).
+// Saw is the basic computation unit, it's largely a state machine.
 type Saw interface {
 	// Feeds a new data point into Saw, implementation should allow concurrent call
-	// for this method, or use Queue / Par / Table to manage concurrency.
+	// for this method, or use Queue / Par / Table / Transform to manage concurrency.
 	Emit(v Datum) error
 
 	// Returning computation result based on current state, this can take long if

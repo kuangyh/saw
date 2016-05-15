@@ -16,6 +16,8 @@ import (
 type BatchSpec struct {
 	// Reads data from here
 	Input storage.ResourceSpec
+	// Optional, decode input instead of passing []byte
+	InputValueDecoder saw.ValueDecoder
 	// Then data will be publish to this topic
 	Topic saw.TopicID
 	// Use NumShards queues to call subscribers in parallel, it makes no sense
@@ -30,9 +32,10 @@ type BatchSpec struct {
 }
 
 type shardRunner struct {
-	rc       storage.ResourceSpec
-	index    int
-	hashFunc table.KeyHashFunc
+	rc           storage.ResourceSpec
+	index        int
+	hashFunc     table.KeyHashFunc
+	valueDecoder saw.ValueDecoder
 
 	topic saw.TopicID
 	par   *Par
@@ -67,6 +70,13 @@ func (runner *shardRunner) run() {
 
 func (runner *shardRunner) sched(datum saw.Datum, hash int) {
 	runner.par.Sched(func() {
+		if runner.valueDecoder != nil {
+			decodedValue, err := runner.valueDecoder.DecodeValue(datum.Value.([]byte))
+			if err != nil {
+				return
+			}
+			datum.Value = decodedValue
+		}
 		saw.GlobalHub.Publish(runner.topic, datum)
 	}, hash)
 }
@@ -74,11 +84,12 @@ func (runner *shardRunner) sched(datum saw.Datum, hash int) {
 func runInSeq(spec BatchSpec, startInputShard int, numInputShards int, par *Par) {
 	for i := startInputShard; i < startInputShard+numInputShards; i++ {
 		runner := shardRunner{
-			rc:       spec.Input,
-			index:    i,
-			hashFunc: spec.KeyHashFunc,
-			topic:    spec.Topic,
-			par:      par,
+			rc:           spec.Input,
+			index:        i,
+			hashFunc:     spec.KeyHashFunc,
+			valueDecoder: spec.InputValueDecoder,
+			topic:        spec.Topic,
+			par:          par,
 		}
 		runner.run()
 	}

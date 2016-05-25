@@ -6,10 +6,10 @@ import (
 	"golang.org/x/net/context"
 )
 
-type SeqID int
+type SeqID int64
 
 func (seq SeqID) Advance(x int) SeqID {
-	return SeqID(int(seq) + x)
+	return SeqID(int64(seq) + int64(x))
 }
 
 func (seq SeqID) DistanceFrom(other SeqID) int {

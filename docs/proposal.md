@@ -10,7 +10,7 @@ ETL == Extract, Transform and Load, or "log processing" in muggle world.
 - Raw logs are dirty, do clean up filter, normalization --- tighly coupled to biz logic
 - Assume 2h session window, provided aggregated detailed session data asap.
 
-## Use case: dimensional metrics
+### Use case: dimensional metrics
 
 - Use session data.
 - Extract 10+ dimensions and 100+ event signals for each session

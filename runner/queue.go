@@ -30,7 +30,7 @@ func (q *Queue) close() {
 	close(q.chn)
 }
 
-// Schedule a function to run on queue.
+// Schedule datum processing in queue.
 func (q *Queue) Sched(datum saw.Datum) {
 	q.waitGroup.Add(1)
 	q.chn <- datum
@@ -43,7 +43,7 @@ type Par struct {
 	queues []*Queue
 }
 
-// Schedule a function to run in one of Par's queues, returns after inserted in
+// Schedule datum processing in one of Par's queues, returns after inserted in
 // queue. when hash < 0, schedule select queue by round-robin, otherwise, it
 // selects specific queue by hash. hash is just an optimization to minimize
 // contention, caller should not relie on queue selecting behavior.

@@ -3,24 +3,25 @@ package runner
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/kuangyh/saw"
 )
 
 // Default schedule strategy of Par.
 const SchedRoundRobin = -1
 
-// Queue runs function scheduled in a seperate gorountine. Normally you don't
-// need to explicitly create or use Queue, Par / Tables implicitly create queues
-// and schedule user-defined Saws to some of them.
+// Queue emits Datum to internal Saw in sequence.
+//
+// Queue needed to be created from QueueGroup
 type Queue struct {
-	// TODO(yuheng): potential contetion hotspot, current benchmark doesn't show
-	// problem. Find other solution if it's actually troublesome.
+	dst       saw.Saw
 	waitGroup *sync.WaitGroup
-	chn       chan func()
+	chn       chan saw.Datum
 }
 
 func (q *Queue) run() {
-	for f := range q.chn {
-		f()
+	for datum := range q.chn {
+		_ = q.dst.Emit(datum)
 		q.waitGroup.Done()
 	}
 }
@@ -30,9 +31,9 @@ func (q *Queue) close() {
 }
 
 // Schedule a function to run on queue.
-func (q *Queue) Sched(f func()) {
+func (q *Queue) Sched(datum saw.Datum) {
 	q.waitGroup.Add(1)
-	q.chn <- f
+	q.chn <- datum
 }
 
 // Par manages a set of queues, when Sched, it puts task into one of them using
@@ -46,14 +47,14 @@ type Par struct {
 // queue. when hash < 0, schedule select queue by round-robin, otherwise, it
 // selects specific queue by hash. hash is just an optimization to minimize
 // contention, caller should not relie on queue selecting behavior.
-func (par *Par) Sched(f func(), hash int) {
+func (par *Par) Sched(datum saw.Datum, hash int) {
 	var shard int
 	if hash >= 0 {
 		shard = hash % len(par.queues)
 	} else {
 		shard = int(atomic.AddUint32(&par.round, 1)) % len(par.queues)
 	}
-	par.queues[shard].Sched(f)
+	par.queues[shard].Sched(datum)
 }
 
 // QueueGroup manages a set of queues running colloaborated tasks.
@@ -64,12 +65,13 @@ type QueueGroup struct {
 }
 
 // New creates a queue managed by this QueueGroup.
-func (group *QueueGroup) New(bufferSize int) *Queue {
+func (group *QueueGroup) New(dst saw.Saw, bufferSize int) *Queue {
 	group.mu.Lock()
 	defer group.mu.Unlock()
 	queue := &Queue{
+		dst:       dst,
 		waitGroup: &group.waitGroup,
-		chn:       make(chan func(), bufferSize),
+		chn:       make(chan saw.Datum, bufferSize),
 	}
 	go queue.run()
 	group.queues = append(group.queues, queue)
@@ -77,10 +79,10 @@ func (group *QueueGroup) New(bufferSize int) *Queue {
 }
 
 // NewPar creates a par with all its queues managed by this QueueGroup
-func (group *QueueGroup) NewPar(numShards, bufferSize int) *Par {
+func (group *QueueGroup) NewPar(dst saw.Saw, numShards, bufferSize int) *Par {
 	queues := make([]*Queue, numShards)
 	for i := 0; i < numShards; i++ {
-		queues[i] = group.New(bufferSize)
+		queues[i] = group.New(dst, bufferSize)
 	}
 	return &Par{queues: queues}
 }

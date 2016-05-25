@@ -38,3 +38,9 @@ type ExportSaw interface {
 type MergeSaw interface {
 	MergeFrom(other interface{}) error
 }
+
+type SawNoResult struct{}
+
+func (snr SawNoResult) Result(ctx context.Context) (interface{}, error) {
+	return nil, nil
+}

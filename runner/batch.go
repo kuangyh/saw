@@ -31,14 +31,29 @@ type BatchSpec struct {
 	KeyHashFunc table.KeyHashFunc
 }
 
-type shardRunner struct {
-	rc           storage.ResourceSpec
-	index        int
-	hashFunc     table.KeyHashFunc
+type hubBridge struct {
+	saw.SawNoResult
+	topic        saw.TopicID
 	valueDecoder saw.ValueDecoder
+}
 
-	topic saw.TopicID
-	par   *Par
+func (hb *hubBridge) Emit(datum saw.Datum) error {
+	if hb.valueDecoder != nil {
+		decodedValue, err := hb.valueDecoder.DecodeValue(datum.Value.([]byte))
+		if err != nil {
+			return err
+		}
+		datum.Value = decodedValue
+	}
+	saw.GlobalHub.Publish(hb.topic, datum)
+	return nil
+}
+
+type shardRunner struct {
+	rc       storage.ResourceSpec
+	index    int
+	hashFunc table.KeyHashFunc
+	par      *Par
 }
 
 func (runner *shardRunner) run() {
@@ -61,35 +76,20 @@ func (runner *shardRunner) run() {
 		if runner.hashFunc != nil {
 			hash = runner.hashFunc(datum.Key)
 		}
-		runner.sched(datum, hash)
+		runner.par.Sched(datum, hash)
 	}
 	if err != io.EOF {
 		log.Printf("DatumReader error for %v, shard=%d, err=%v", runner.rc, runner.index, err)
 	}
 }
 
-func (runner *shardRunner) sched(datum saw.Datum, hash int) {
-	runner.par.Sched(func() {
-		if runner.valueDecoder != nil {
-			decodedValue, err := runner.valueDecoder.DecodeValue(datum.Value.([]byte))
-			if err != nil {
-				return
-			}
-			datum.Value = decodedValue
-		}
-		saw.GlobalHub.Publish(runner.topic, datum)
-	}, hash)
-}
-
 func runInSeq(spec BatchSpec, startInputShard int, numInputShards int, par *Par) {
 	for i := startInputShard; i < startInputShard+numInputShards; i++ {
 		runner := shardRunner{
-			rc:           spec.Input,
-			index:        i,
-			hashFunc:     spec.KeyHashFunc,
-			valueDecoder: spec.InputValueDecoder,
-			topic:        spec.Topic,
-			par:          par,
+			rc:       spec.Input,
+			index:    i,
+			hashFunc: spec.KeyHashFunc,
+			par:      par,
 		}
 		runner.run()
 	}
@@ -103,6 +103,10 @@ func runSingleBatch(spec BatchSpec, queueGroup *QueueGroup) {
 		numInputShards = 1
 	}
 	var wg sync.WaitGroup
+	hubBridge := &hubBridge{
+		topic:        spec.Topic,
+		valueDecoder: spec.InputValueDecoder,
+	}
 	if spec.NumShards < numInputShards {
 		// 1 runner vs. multiple input
 		var remain float64 = 0.0
@@ -117,7 +121,7 @@ func runSingleBatch(spec BatchSpec, queueGroup *QueueGroup) {
 				log.Printf(
 					"Start runner input=%v, topic=%v, shard=%d:%d, queuePerShard=1",
 					spec.Input, spec.Topic, startInputShard, startInputShard+numInputShards-1)
-				par := queueGroup.NewPar(1, spec.QueueBufferSize)
+				par := queueGroup.NewPar(hubBridge, 1, spec.QueueBufferSize)
 				runInSeq(spec, startInputShard, numInputShards, par)
 				wg.Done()
 			}(currInputShard, numInputs)
@@ -136,7 +140,7 @@ func runSingleBatch(spec BatchSpec, queueGroup *QueueGroup) {
 				log.Printf(
 					"Start runner input=%v, topic=%v, shard=%d:%d, queuePerShard=%d",
 					spec.Input, spec.Topic, shardIdx, shardIdx, numQueues)
-				par := queueGroup.NewPar(numQueues, spec.QueueBufferSize)
+				par := queueGroup.NewPar(hubBridge, numQueues, spec.QueueBufferSize)
 				runInSeq(spec, shardIdx, 1, par)
 				wg.Done()
 			}(i, numQueues)
